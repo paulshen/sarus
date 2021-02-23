@@ -84,6 +84,7 @@ var Sarus = /** @class */ (function () {
           miliseconds) is used as the delay. Default is true.
         */
         this.retryConnectionDelay = retryConnectionDelay || true;
+        this.reconnectAttemptNum = 0;
         /*
           Sets the storage type for the messages in the message queue. By default
           it is an in-memory option, but can also be set as 'session' for
@@ -195,7 +196,7 @@ var Sarus = /** @class */ (function () {
             open: [],
             close: [],
             message: [],
-            error: []
+            error: [],
         }; }
         // validateEvents(eventListeners);
         return eventListeners;
@@ -209,6 +210,7 @@ var Sarus = /** @class */ (function () {
         this.attachEventListeners();
         if (this.messages.length > 0)
             this.process();
+        this.reconnectTimeout = undefined;
     };
     /**
      * Reconnects the WebSocket client based on the retryConnectionDelay setting.
@@ -216,19 +218,27 @@ var Sarus = /** @class */ (function () {
     Sarus.prototype.reconnect = function () {
         var self = this;
         var retryConnectionDelay = self.retryConnectionDelay;
+        if (this.reconnectAttemptNum > 5) {
+            return;
+        }
         switch (typeof retryConnectionDelay) {
             case "boolean":
                 if (retryConnectionDelay) {
-                    setTimeout(self.connect, 1000);
+                    this.reconnectTimeout = window.setTimeout(self.connect, (0.5 + Math.random() / 2) *
+                        1000 *
+                        Math.pow(1.5, this.reconnectAttemptNum));
                 }
                 else {
                     self.connect();
                 }
                 break;
             case "number":
-                setTimeout(self.connect, retryConnectionDelay);
+                this.reconnectTimeout = window.setTimeout(self.connect, (0.5 + Math.random() / 2) *
+                    retryConnectionDelay *
+                    Math.pow(1.5, this.reconnectAttemptNum));
                 break;
         }
+        this.reconnectAttemptNum++;
     };
     /**
      * Disconnects the WebSocket client from the server, and changes the
@@ -241,6 +251,10 @@ var Sarus = /** @class */ (function () {
         // We do this to prevent automatic reconnections;
         if (!overrideDisableReconnect) {
             self.reconnectAutomatically = false;
+        }
+        if (this.reconnectTimeout !== undefined) {
+            clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = undefined;
         }
         if (self.ws)
             self.ws.close();
@@ -354,6 +368,9 @@ var Sarus = /** @class */ (function () {
         constants_1.WS_EVENT_NAMES.forEach(function (eventName) {
             self.ws["on" + eventName] = function (e) {
                 self.eventListeners[eventName].forEach(function (f) { return f(e); });
+                if (eventName === "open") {
+                    self.reconnectAttemptNum = 0;
+                }
                 if (eventName === "close" && self.reconnectAutomatically) {
                     self.reconnect();
                 }

@@ -33,6 +33,8 @@ export default class Sarus {
     retryProcessTimePeriod?: number;
     reconnectAutomatically?: boolean;
     retryConnectionDelay?: boolean | number;
+    reconnectAttemptNum: number;
+    reconnectTimeout: number | undefined;
     storageType: string;
     storageKey: string;
     messageStore: any;

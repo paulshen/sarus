@@ -1,6 +1,6 @@
 // File Dependencies
-import { WS_EVENT_NAMES, DATA_STORAGE_TYPES } from "./lib/constants";
-import { serialize, deserialize } from "./lib/dataTransformer";
+import { DATA_STORAGE_TYPES, WS_EVENT_NAMES } from "./lib/constants";
+import { deserialize, serialize } from "./lib/dataTransformer";
 import { EventListenersInterface } from "./lib/validators";
 
 interface StorageParams {
@@ -75,6 +75,8 @@ export default class Sarus {
   retryProcessTimePeriod?: number;
   reconnectAutomatically?: boolean;
   retryConnectionDelay?: boolean | number;
+  reconnectAttemptNum: number;
+  reconnectTimeout: number | undefined;
   storageType: string;
   storageKey: string;
 
@@ -93,7 +95,7 @@ export default class Sarus {
       retryProcessTimePeriod, // TODO - write a test case to check this
       retryConnectionDelay,
       storageType = "memory",
-      storageKey = "sarus"
+      storageKey = "sarus",
     } = props;
 
     this.eventListeners = this.auditEventListeners(eventListeners);
@@ -127,6 +129,8 @@ export default class Sarus {
       miliseconds) is used as the delay. Default is true.
     */
     this.retryConnectionDelay = retryConnectionDelay || true;
+
+    this.reconnectAttemptNum = 0;
 
     /*
       Sets the storage type for the messages in the message queue. By default
@@ -244,7 +248,7 @@ export default class Sarus {
       open: [],
       close: [],
       message: [],
-      error: []
+      error: [],
     }
   ) {
     // validateEvents(eventListeners);
@@ -259,6 +263,7 @@ export default class Sarus {
     this.setBinaryType();
     this.attachEventListeners();
     if (this.messages.length > 0) this.process();
+    this.reconnectTimeout = undefined;
   }
 
   /**
@@ -267,18 +272,32 @@ export default class Sarus {
   reconnect() {
     const self = this;
     const { retryConnectionDelay } = self;
+    if (this.reconnectAttemptNum > 8) {
+      return;
+    }
     switch (typeof retryConnectionDelay) {
       case "boolean":
         if (retryConnectionDelay) {
-          setTimeout(self.connect, 1000);
+          this.reconnectTimeout = window.setTimeout(
+            self.connect,
+            (0.5 + Math.random() / 2) *
+              2000 *
+              Math.pow(1.5, this.reconnectAttemptNum)
+          );
         } else {
           self.connect();
         }
         break;
       case "number":
-        setTimeout(self.connect, retryConnectionDelay);
+        this.reconnectTimeout = window.setTimeout(
+          self.connect,
+          (0.5 + Math.random() / 2) *
+            retryConnectionDelay *
+            Math.pow(1.5, this.reconnectAttemptNum)
+        );
         break;
     }
+    this.reconnectAttemptNum++;
   }
 
   /**
@@ -292,6 +311,10 @@ export default class Sarus {
     // We do this to prevent automatic reconnections;
     if (!overrideDisableReconnect) {
       self.reconnectAutomatically = false;
+    }
+    if (this.reconnectTimeout !== undefined) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = undefined;
     }
     if (self.ws) self.ws.close();
   }
@@ -416,9 +439,12 @@ export default class Sarus {
    */
   attachEventListeners() {
     const self: any = this;
-    WS_EVENT_NAMES.forEach(eventName => {
+    WS_EVENT_NAMES.forEach((eventName) => {
       self.ws[`on${eventName}`] = (e: Function) => {
         self.eventListeners[eventName].forEach((f: Function) => f(e));
+        if (eventName === "open") {
+          self.reconnectAttemptNum = 0;
+        }
         if (eventName === "close" && self.reconnectAutomatically) {
           self.reconnect();
         }
